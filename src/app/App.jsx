@@ -1,14 +1,6 @@
 
 import React, { useEffect, useMemo, useState } from 'react'
-import { createClient } from '@supabase/supabase-js'
-import emailjs from 'emailjs-com'
-
-// Env (Vercel) or in-app Settings
-const ENV_URL = import.meta.env.VITE_SUPABASE_URL || ''
-const ENV_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || ''
-const EMAILJS_SERVICE_ID = import.meta.env.VITE_EMAILJS_SERVICE_ID || ''
-const EMAILJS_TEMPLATE_ID = import.meta.env.VITE_EMAILJS_TEMPLATE_ID || ''
-const EMAILJS_PUBLIC_KEY = import.meta.env.VITE_EMAILJS_PUBLIC_KEY || ''
+import { supa } from './supa'
 
 const AREAS = [
   "Impressora Speed","Impressora Adast 715","Impressora Adast 725","Impressora GTO Capas",
@@ -18,154 +10,81 @@ const AREAS = [
 ]
 const FORMATS = ["11,7x17,5cm","13,9x21cm","15,7x23cm","Tamanho especial"]
 
-function useSupabase() {
-  const [url,setUrl] = useState(localStorage.getItem('supabase.url')||ENV_URL)
-  const [key,setKey] = useState(localStorage.getItem('supabase.key')||ENV_KEY)
-  const [client,setClient] = useState(null)
-  useEffect(()=>{
-    if(url && key){
-      const c = createClient(url, key)
-      setClient(c)
-      localStorage.setItem('supabase.url', url)
-      localStorage.setItem('supabase.key', key)
-    }
-  },[url,key])
-  return {url,setUrl,key,setKey,client}
-}
-
-const daysLeft = (iso)=> Math.ceil((new Date(iso).getTime() - Date.now())/(1000*60*60*24))
-
 export default function App(){
-  const supa = useSupabase()
   const [me,setMe] = useState(null)
   const [productions,setProductions] = useState([])
+  const [loading,setLoading] = useState(false)
 
-  useEffect(()=>{ if(supa.client){ refreshProds() } },[supa.client])
+  useEffect(()=>{ if(supa){ refreshProds() } },[])
+  useEffect(()=>{ if(supa && me){ refreshProds() } },[me])
 
   async function refreshProds(){
-    const { data, error } = await supa.client.from('productions').select('*').order('deadline')
-    if(error){ console.error(error); alert('Erro ao carregar produções (verifique permissões do Supabase)'); return }
+    setLoading(true)
+    const { data, error } = await supa.from('productions').select('*').order('deadline')
+    if(error){ console.error(error); alert('Erro ao carregar produções'); setLoading(false); return }
     setProductions(data||[])
+    setLoading(false)
   }
 
-  // -------- Auth --------
+  // ---- Auth ----
   async function signIn(username, password){
-    if(!supa.client){ alert('Configure o Supabase em Configurações'); return }
+    if(!supa){ alert('Configure VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY na Vercel'); return }
     const u = (username||'').trim()
     const p = (password||'').trim()
-    // login case-insensitive por email/apelido
-    let { data, error } = await supa.client
+    const { data, error } = await supa
       .from('app_users')
       .select('*')
       .ilike('username', u)
       .eq('password', p)
+      .eq('approved', true)
       .maybeSingle()
-    if(error || !data){ alert('Usuário/senha inválidos'); return }
-    if(data.approved===false){ alert('Sua conta aguarda aprovação da Gerência'); return }
+    if(error || !data){ alert('Usuário/senha inválidos ou não aprovado'); return }
     setMe(data)
   }
 
   async function registerOperator({name,username,password,area}){
-    if(!supa.client){ alert('Configure o Supabase em Configurações'); return }
-    const payload = { name, username: (username||'').trim(), password: (password||'').trim(), role:'operador', area: area||null, approved:false }
-    const { error } = await supa.client.from('app_users').insert(payload)
+    const payload = { name, username:(username||'').trim(), password:(password||'').trim(), role:'operador', area: area||null, approved:false }
+    const { error } = await supa.from('app_users').insert(payload)
     if(error){ console.error(error); alert('Erro ao cadastrar'); return }
-    await supa.client.from('events').insert({ type:'userRegister', details:{ name, username:payload.username, area } })
-    await supa.client.from('notifications').insert({ to_role:'gerencia', message:`Novo cadastro pendente: ${name} (${payload.username})` })
     alert('Cadastro enviado para aprovação da Gerência.')
   }
 
-  // -------- Gerência --------
+  // ---- Gerência ----
   async function addProduction(p){
-    const patch = {
-      ...p,
-      status: 'na fila',
-      current_area: null,
-      created_at: new Date().toISOString()
-    }
-    const { error } = await supa.client.from('productions').insert(patch)
-    if(error){ console.error(error); alert('Erro ao cadastrar produção (cheque políticas do Supabase)'); return }
-    await supa.client.from('book_catalog').upsert({ isbn:patch.isbn, title:patch.title })
-    await supa.client.from('events').insert({ type:'createProduction', details:patch })
-    refreshProds()
+    const patch = { ...p, status:'na fila', current_area:null }
+    const { error } = await supa.from('productions').insert(patch)
+    if(error){ console.error(error); alert('Erro ao cadastrar produção'); return }
+    await refreshProds()
   }
-
   async function deleteProduction(id){
-    const { error } = await supa.client.from('productions').delete().eq('id', id)
-    if(error){ console.error(error); alert('Erro ao deletar produção'); return }
-    refreshProds()
+    const { error } = await supa.from('productions').delete().eq('id', id)
+    if(error){ console.error(error); alert('Erro ao deletar'); return }
+    await refreshProds()
   }
-
   async function approveUser(user, approve){
     if(approve){
-      await supa.client.from('app_users').update({approved:true}).eq('id',user.id)
-      await supa.client.from('events').insert({ type:'userApprove', details:{userId:user.id, username:user.username} })
-      // Email opcional via EmailJS, se ENV estiver configurado
-      if(EMAILJS_SERVICE_ID && EMAILJS_TEMPLATE_ID && EMAILJS_PUBLIC_KEY && (user.username||'').includes('@')){
-        try{
-          emailjs.init(EMAILJS_PUBLIC_KEY)
-          await emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, {
-            to_email: user.username,
-            to_name: user.name || user.username,
-            subject: 'Acesso aprovado – CEDET Produção',
-            message: 'Seu acesso foi aprovado. Você já pode entrar no sistema e ver a fila de produção.'
-          })
-        }catch(e){ console.warn('Falha ao enviar email (ignorado em teste):', e) }
-      }
+      await supa.from('app_users').update({approved:true}).eq('id',user.id)
     }else{
-      await supa.client.from('app_users').delete().eq('id',user.id)
-      await supa.client.from('events').insert({ type:'userReject', details:{userId:user.id, username:user.username} })
+      await supa.from('app_users').delete().eq('id',user.id)
     }
   }
-
   async function deleteUser(user){
-    const { error } = await supa.client.from('app_users').delete().eq('id', user.id)
+    const { error } = await supa.from('app_users').delete().eq('id', user.id)
     if(error){ console.error(error); alert('Erro ao deletar usuário'); return }
   }
 
-  // -------- Operador (ações) --------
-  async function startPrep(p){
-    if(['finalizado','entregue'].includes(p.status)) return
-    await supa.client.from('productions').update({ status:'em preparação', prep_started_at:new Date().toISOString(), current_area: p.current_area || 'Preparação' }).eq('id',p.id)
-    await supa.client.from('events').insert({ type:'startPrep', production_id:p.id, details:{ area:'Preparação' } })
-    refreshProds()
-  }
-  async function startProd(p){
-    if(['finalizado','entregue'].includes(p.status)) return
-    const patch = { status:'em produção' }
-    if(!p.prod_started_at) patch.prod_started_at = new Date().toISOString()
-    if(p.paused_at){ patch.total_paused_ms = (p.total_paused_ms||0) + (Date.now() - new Date(p.paused_at).getTime()); patch.paused_at = null }
-    await supa.client.from('productions').update(patch).eq('id',p.id)
-    await supa.client.from('events').insert({ type:'startArea', production_id:p.id, details:{ area:p.current_area || 'Produção' }})
-    refreshProds()
-  }
+  // ---- Operador ----
+  async function startPrep(p){ await supa.from('productions').update({ status:'em preparação', current_area: 'Preparação' }).eq('id',p.id); refreshProds() }
+  async function startProd(p){ await supa.from('productions').update({ status:'em produção' }).eq('id',p.id); refreshProds() }
   async function togglePause(p){
-    if(p.paused_at){
-      const patch = { paused_at:null, total_paused_ms:(p.total_paused_ms||0) + (Date.now() - new Date(p.paused_at).getTime()), status:'em produção' }
-      await supa.client.from('productions').update(patch).eq('id',p.id)
-      await supa.client.from('events').insert({ type:'resume', production_id:p.id, details:{ area:p.current_area }})
-    }else{
-      await supa.client.from('productions').update({ paused_at:new Date().toISOString(), status:'pausado' }).eq('id',p.id)
-      await supa.client.from('events').insert({ type:'pause', production_id:p.id, details:{ area:p.current_area }})
-    }
-    refreshProds()
+    const newStatus = p.status==='pausado' ? 'em produção' : 'pausado'
+    await supa.from('productions').update({ status:newStatus }).eq('id',p.id); refreshProds()
   }
   async function finishProd(p, discardQty, finalQty){
-    await supa.client.from('productions').update({ status:'finalizado', done_at:new Date().toISOString(), discard_qty:Number(discardQty||0), final_qty:Number(finalQty||0) }).eq('id',p.id)
-    await supa.client.from('events').insert({ type:'finishArea', production_id:p.id, details:{ area:p.current_area, discard:Number(discardQty||0), finalQty:Number(finalQty||0) } })
-    refreshProds()
+    await supa.from('productions').update({ status:'finalizado', discard_qty:Number(discardQty||0), final_qty:Number(finalQty||0) }).eq('id',p.id); refreshProds()
   }
-  async function signalProblem(p, desc){
-    await supa.client.from('events').insert({ type:'problem', production_id:p.id, details:{ area:p.current_area||'—', desc } })
-    await supa.client.from('notifications').insert({ to_role:'gerencia', message:`Problema: ${p.title} – ${desc}` })
-    alert('Problema sinalizado à Gerência.')
-  }
-  async function sendToNextArea(p, nextArea){
-    await supa.client.from('productions').update({ current_area:nextArea, status:'na fila', paused_at:null }).eq('id',p.id)
-    await supa.client.from('events').insert({ type:'handoff', production_id:p.id, details:{ from:p.current_area, to:nextArea } })
-    await supa.client.from('notifications').insert({ to_area:nextArea, message:`Novo trabalho (${p.title}) para ${nextArea}` })
-    refreshProds()
-  }
+  async function signalProblem(p, desc){ await supa.from('events').insert({ type:'problem', production_id:p.id, details:{ desc } }); alert('Problema sinalizado.'); }
+  async function sendToNextArea(p, nextArea){ await supa.from('productions').update({ current_area:nextArea, status:'na fila' }).eq('id',p.id); refreshProds() }
 
   return (
     <div>
@@ -177,7 +96,8 @@ export default function App(){
           deleteProduction={deleteProduction}
           approveUser={approveUser}
           deleteUser={deleteUser}
-          supa={supa}
+          reload={refreshProds}
+          loading={loading}
         />
       )}
       {me?.role==='operador' && (
@@ -189,9 +109,11 @@ export default function App(){
           finishProd={finishProd}
           sendToNextArea={sendToNextArea}
           signalProblem={signalProblem}
+          reload={refreshProds}
+          loading={loading}
         />
       )}
-      {me?.role==='consultor' && <Consultant productions={productions} />}
+      {me?.role==='consultor' && <Consultant productions={productions} reload={refreshProds} loading={loading} />}
     </div>
   )
 }
@@ -222,7 +144,6 @@ function Login({ onSignIn, onRegister }){
           <div className="small">Não tem conta?</div>
           <button className="btn secondary" onClick={()=>setOpenReg(true)}>Novo cadastro</button>
         </div>
-
         {openReg && (
           <div className="card p16 mb12" style={{marginTop:12}}>
             <div className="mb12"><b>Novo cadastro (Operador)</b></div>
@@ -237,7 +158,6 @@ function Login({ onSignIn, onRegister }){
               <button className="btn" onClick={()=>onRegister({name:rName,username:rUser,password:rPass,area:rArea})}>Enviar para aprovação</button>
               <button className="btn secondary" onClick={()=>setOpenReg(false)}>Cancelar</button>
             </div>
-            <div className="small muted" style={{marginTop:8}}>A Gerência será notificada para aprovar/recusar seu acesso.</div>
           </div>
         )}
       </div>
@@ -245,7 +165,7 @@ function Login({ onSignIn, onRegister }){
   )
 }
 
-function Manager({ productions, addProduction, deleteProduction, approveUser, deleteUser, supa }){
+function Manager({ productions, addProduction, deleteProduction, approveUser, deleteUser, reload, loading }){
   const [isbn,setIsbn] = useState('')
   const [title,setTitle] = useState('')
   const [qty,setQty] = useState(0)
@@ -258,15 +178,19 @@ function Manager({ productions, addProduction, deleteProduction, approveUser, de
   const [users,setUsers] = useState([])
 
   useEffect(()=>{ (async()=>{
-    if(!supa.client) return
-    const { data: pend } = await supa.client.from('app_users').select('*').eq('approved', false)
+    const { data: pend } = await supa.from('app_users').select('*').eq('approved', false)
     setPending(pend||[])
-    const { data: us } = await supa.client.from('app_users').select('*').order('role')
+    const { data: us } = await supa.from('app_users').select('*').order('role')
     setUsers(us||[])
-  })() },[supa.client])
+  })() },[])
 
   return (
     <div className="container">
+      <div className="between mb12">
+        <h3>Gerência</h3>
+        <button className="btn secondary" onClick={reload}>{loading?'Atualizando...':'Atualizar'}</button>
+      </div>
+
       <div className="grid2 mb16">
         <div className="card p16">
           <div className="mb12"><b>Cadastrar nova produção</b></div>
@@ -291,7 +215,7 @@ function Manager({ productions, addProduction, deleteProduction, approveUser, de
         </div>
 
         <div className="card p16">
-          <div className="between mb12"><b>Fila de produção</b><div className="small muted">Clique para deletar</div></div>
+          <div className="between mb12"><b>Fila de produção</b></div>
           <div className="list">
             {productions.map(p=> (
               <div key={p.id} className="between card p16 mb12">
@@ -318,13 +242,13 @@ function Manager({ productions, addProduction, deleteProduction, approveUser, de
               <div className="row">
                 <button className="btn" onClick={async ()=>{
                   await approveUser(u,true)
-                  const { data } = await supa.client.from('app_users').select('*').eq('approved', false)
+                  const { data } = await supa.from('app_users').select('*').eq('approved', false)
                   setPending(data||[])
-                  alert('Operador aprovado e notificado.')
+                  alert('Operador aprovado.')
                 }}>Aprovar</button>
                 <button className="btn danger" onClick={async ()=>{
                   await approveUser(u,false)
-                  const { data } = await supa.client.from('app_users').select('*').eq('approved', false)
+                  const { data } = await supa.from('app_users').select('*').eq('approved', false)
                   setPending(data||[])
                   alert('Cadastro removido.')
                 }}>Recusar</button>
@@ -347,7 +271,7 @@ function Manager({ productions, addProduction, deleteProduction, approveUser, de
   )
 }
 
-function Operator({ productions, startPrep, startProd, togglePause, finishProd, sendToNextArea, signalProblem }){
+function Operator({ productions, startPrep, startProd, togglePause, finishProd, sendToNextArea, signalProblem, reload, loading }){
   const [search,setSearch] = useState('')
   const [finishFor,setFinishFor] = useState(null)
   const [discard,setDiscard] = useState(0)
@@ -357,6 +281,10 @@ function Operator({ productions, startPrep, startProd, togglePause, finishProd, 
 
   return (
     <div className="container">
+      <div className="between mb12">
+        <h3>Operador</h3>
+        <button className="btn secondary" onClick={reload}>{loading?'Atualizando...':'Atualizar'}</button>
+      </div>
       <div className="card p16 mb16">
         <div className="between mb12">
           <b>Fila de produção</b>
@@ -380,7 +308,7 @@ function Operator({ productions, startPrep, startProd, togglePause, finishProd, 
               <div className="roww" style={{marginTop:8}}>
                 <button className="btn" onClick={()=>startPrep(p)}>Preparação</button>
                 <button className="btn" onClick={()=>startProd(p)}>Iniciar</button>
-                <button className="btn secondary" onClick={()=>togglePause(p)}>{p.paused_at? 'Retomar':'Pausar'}</button>
+                <button className="btn secondary" onClick={()=>togglePause(p)}>{p.status==='pausado'? 'Retomar':'Pausar'}</button>
                 <button className="btn" onClick={()=>setFinishFor(p)}>Finalizar</button>
               </div>
               <div className="roww" style={{marginTop:12}}>
@@ -409,9 +337,13 @@ function Operator({ productions, startPrep, startProd, togglePause, finishProd, 
   )
 }
 
-function Consultant({ productions }){
+function Consultant({ productions, reload, loading }){
   return (
     <div className="container">
+      <div className="between mb12">
+        <h3>Consultor</h3>
+        <button className="btn secondary" onClick={reload}>{loading?'Atualizando...':'Atualizar'}</button>
+      </div>
       <div className="card p16">
         <div className="mb12"><b>Status dos livros</b></div>
         {productions.map(p=> (
