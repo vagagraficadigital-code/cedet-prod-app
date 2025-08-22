@@ -1,14 +1,34 @@
-
 import React, { useEffect, useMemo, useState } from 'react'
 import { supa } from './supa'
 
+// Áreas do fluxo (chips para encaminhar)
 const AREAS = [
   "Impressora Speed","Impressora Adast 715","Impressora Adast 725","Impressora GTO Capas",
   "Impressora Digital Versant - Capas","Impressora Digital Nuvera - Miolo","Laminação de Capas",
   "Dobradeira","Intercalação","Costura","Blocagem","Destaque Digital","Destaque Off-set",
   "Coladeira Baby 01","Coladeira Baby 02","Coladeira Eurobind","Trilateral","Revisão","Embalagem","Entregue"
 ]
+
 const FORMATS = ["11,7x17,5cm","13,9x21cm","15,7x23cm","Tamanho especial"]
+
+// Helpers
+function fmtDate(d){
+  try{
+    const dt = new Date(d)
+    return dt.toLocaleDateString()
+  }catch(e){ return '—' }
+}
+function dueBadge(deadline){
+  if(!deadline) return null
+  const now = Date.now()
+  const dl = new Date(deadline).getTime()
+  const diff = dl - now
+  const day = 24*60*60*1000
+  if(diff < 0) return <span className="badge danger">VENCIDO</span>
+  if(diff <= 2*day) return <span className="badge warn">⚠ vence em 48h</span>
+  if(diff <= 5*day) return <span className="badge warn">⚠ vence em 5 dias</span>
+  return <span className="badge ok">no prazo</span>
+}
 
 export default function App(){
   const [me,setMe] = useState(null)
@@ -20,7 +40,7 @@ export default function App(){
 
   async function refreshProds(){
     setLoading(true)
-    const { data, error } = await supa.from('productions').select('*').order('deadline')
+    const { data, error } = await supa.from('productions').select('*').order('deadline', { ascending: true })
     if(error){ console.error(error); alert('Erro ao carregar produções'); setLoading(false); return }
     setProductions(data||[])
     setLoading(false)
@@ -129,7 +149,7 @@ function Login({ onSignIn, onRegister }){
 
   return (
     <div className="container" style={{minHeight:'100vh',display:'grid',placeItems:'center'}}>
-      <div className="card p24" style={{width:480}}>
+      <div className="card p24" style={{width:520}}>
         <div className="row mb16">
           <img src="/logo.png" className="logo" alt="logo"/>
           <div>
@@ -208,6 +228,7 @@ function Manager({ productions, addProduction, deleteProduction, approveUser, de
           <div className="row" style={{marginTop:12}}>
             <button className="btn" onClick={()=>{
               if(!isbn || !title || !qty || !pages || !osNumber || !deadline){ alert('Preencha todos os campos'); return }
+              // Salva deadline como ISO (compatível com timestamptz)
               addProduction({ isbn, title, qty, pages, format, os_number: osNumber, deadline: new Date(deadline).toISOString() })
               setIsbn(''); setTitle(''); setQty(0); setPages(0); setOs('')
             }}>Cadastrar</button>
@@ -220,9 +241,11 @@ function Manager({ productions, addProduction, deleteProduction, approveUser, de
             {productions.map(p=> (
               <div key={p.id} className="between card p16 mb12">
                 <div>
-                  <div><b>{p.title}</b> <span className="small muted">ISBN {p.isbn}</span></div>
-                  <div className="small muted">OS {p.os_number} • {p.qty} un. • {p.pages} págs • Formato {p.format} • Status: {p.status}</div>
-                  <div className="small">Área atual: <b>{p.current_area||'—'}</b></div>
+                  <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+                    <b>{p.title}</b> <span className="small muted">ISBN {p.isbn}</span> {dueBadge(p.deadline)}
+                  </div>
+                  <div className="small muted">OS {p.os_number} • {p.qty} un. • {p.pages} págs • Formato {p.format} • Status: {p.status||'na fila'}</div>
+                  <div className="small">Área atual: <b>{p.current_area||'—'}</b> • Prazo: <b>{fmtDate(p.deadline)}</b></div>
                 </div>
                 <button className="btn danger" onClick={()=>{ if(confirm('Deletar esta produção?')) deleteProduction(p.id) }}>Deletar</button>
               </div>
@@ -259,14 +282,28 @@ function Manager({ productions, addProduction, deleteProduction, approveUser, de
 
         <div className="card p16">
           <div className="mb12"><b>Usuários</b> <span className="small muted">(Gerentes, Consultores e Operadores)</span></div>
-          {users.map(u=> (
-            <div key={u.id} className="between mb12">
-              <div><b>{u.name||u.username}</b> <span className="muted small">({u.username})</span> • <span className="small">Papel: {u.role}</span> • <span className="small">Aprovado: {u.approved? 'Sim':'Não'}</span></div>
-              <button className="btn danger" onClick={()=>{ if(confirm('Deletar este usuário?')) deleteUser(u) }}>Deletar</button>
-            </div>
-          ))}
+          <UserList onDelete={deleteUser} />
         </div>
       </div>
+    </div>
+  )
+}
+
+function UserList({ onDelete }){
+  const [users,setUsers] = useState([])
+  useEffect(()=>{ (async()=>{
+    const { data } = await supa.from('app_users').select('*').order('role')
+    setUsers(data||[])
+  })() },[])
+  return (
+    <div>
+      {users.map(u=> (
+        <div key={u.id} className="between mb12">
+          <div><b>{u.name||u.username}</b> <span className="muted small">({u.username})</span> • <span className="small">Papel: {u.role}</span> • <span className="small">Aprovado: {u.approved? 'Sim':'Não'}</span></div>
+          <button className="btn danger" onClick={()=>{ if(confirm('Deletar este usuário?')) onDelete(u) }}>Deletar</button>
+        </div>
+      ))}
+      {users.length===0 && <div className="small muted">Sem usuários.</div>}
     </div>
   )
 }
@@ -299,9 +336,11 @@ function Operator({ productions, startPrep, startProd, togglePause, finishProd, 
             <div key={p.id} className="card p16 mb12">
               <div className="between">
                 <div>
-                  <div><b>{p.title}</b> <span className="small muted">ISBN {p.isbn}</span></div>
+                  <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+                    <b>{p.title}</b> <span className="small muted">ISBN {p.isbn}</span> {dueBadge(p.deadline)}
+                  </div>
                   <div className="small muted">OS {p.os_number} • {p.qty} un. • {p.pages} págs</div>
-                  <div className="small">Área atual: <b>{p.current_area||'—'}</b> • Status: <b>{p.status}</b></div>
+                  <div className="small">Área atual: <b>{p.current_area||'—'}</b> • Status: <b>{p.status||'na fila'}</b> • Prazo: <b>{fmtDate(p.deadline)}</b></div>
                 </div>
                 <button className="btn secondary" onClick={()=>{ const d=prompt('Descreva o problema:'); if(d) signalProblem(p,d) }}>Problema</button>
               </div>
@@ -349,10 +388,12 @@ function Consultant({ productions, reload, loading }){
         {productions.map(p=> (
           <div key={p.id} className="between mb12">
             <div>
-              <div><b>{p.title}</b> <span className="small muted">ISBN {p.isbn}</span></div>
-              <div className="small muted">Status: {p.status} • Área: {p.current_area||'—'}</div>
+              <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+                <b>{p.title}</b> <span className="small muted">ISBN {p.isbn}</span> {dueBadge(p.deadline)}
+              </div>
+              <div className="small muted">Status: {p.status||'na fila'} • Área: {p.current_area||'—'}</div>
             </div>
-            <div className="small muted">Prazo: {p.deadline? new Date(p.deadline).toLocaleDateString():'—'}</div>
+            <div className="small muted">Prazo: {fmtDate(p.deadline)}</div>
           </div>
         ))}
         {productions.length===0 && <div className="small muted">Sem itens.</div>}
