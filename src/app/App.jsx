@@ -1,32 +1,28 @@
+// ATENÇÃO: mantenha SOMENTE este arquivo App.jsx em src/app/ (remova App_hotfix.jsx / App.hotfix.jsx)
+// Requisitos: existir arquivo src/app/supa.js exportando { supa } (createClient) com VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY
+
 import React, { useEffect, useMemo, useState } from 'react'
 import { supa } from './supa'
 
-// Áreas do fluxo (chips para encaminhar)
+// Áreas do fluxo
 const AREAS = [
   "Impressora Speed","Impressora Adast 715","Impressora Adast 725","Impressora GTO Capas",
   "Impressora Digital Versant - Capas","Impressora Digital Nuvera - Miolo","Laminação de Capas",
   "Dobradeira","Intercalação","Costura","Blocagem","Destaque Digital","Destaque Off-set",
   "Coladeira Baby 01","Coladeira Baby 02","Coladeira Eurobind","Trilateral","Revisão","Embalagem","Entregue"
 ]
-
 const FORMATS = ["11,7x17,5cm","13,9x21cm","15,7x23cm","Tamanho especial"]
 
 // Helpers
-function fmtDate(d){
-  try{
-    const dt = new Date(d)
-    return dt.toLocaleDateString()
-  }catch(e){ return '—' }
-}
-function dueBadge(deadline){
+const dayMs = 24*60*60*1000
+const fmtDate = (d)=> d ? new Date(d).toLocaleDateString() : "—"
+function DueBadge({deadline}){
   if(!deadline) return null
-  const now = Date.now()
   const dl = new Date(deadline).getTime()
-  const diff = dl - now
-  const day = 24*60*60*1000
-  if(diff < 0) return <span className="badge danger">VENCIDO</span>
-  if(diff <= 2*day) return <span className="badge warn">⚠ vence em 48h</span>
-  if(diff <= 5*day) return <span className="badge warn">⚠ vence em 5 dias</span>
+  const diff = dl - Date.now()
+  if (diff < 0) return <span className="badge danger">VENCIDO</span>
+  if (diff <= 2*dayMs) return <span className="badge warn">⚠ 48h</span>
+  if (diff <= 5*dayMs) return <span className="badge warn">⚠ 5 dias</span>
   return <span className="badge ok">no prazo</span>
 }
 
@@ -35,57 +31,55 @@ export default function App(){
   const [productions,setProductions] = useState([])
   const [loading,setLoading] = useState(false)
 
-  useEffect(()=>{ if(supa){ refreshProds() } },[])
-  useEffect(()=>{ if(supa && me){ refreshProds() } },[me])
+  // carrega fila sempre que loga
+  useEffect(()=>{ if(me) refreshProds() },[me])
 
   async function refreshProds(){
     setLoading(true)
-    const { data, error } = await supa.from('productions').select('*').order('deadline', { ascending: true })
-    if(error){ console.error(error); alert('Erro ao carregar produções'); setLoading(false); return }
+    const { data, error } = await supa.from('productions').select('*').order('deadline',{ascending:true})
+    if(error){ console.error(error); alert('Erro ao carregar produções'); }
     setProductions(data||[])
     setLoading(false)
   }
 
-  // ---- Auth ----
+  // ---------- AUTH ----------
   async function signIn(username, password){
-    if(!supa){ alert('Configure VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY na Vercel'); return }
     const u = (username||'').trim()
     const p = (password||'').trim()
     const { data, error } = await supa
       .from('app_users')
       .select('*')
-      .ilike('username', u)
+      .ilike('username', u)     // case-insensitive
       .eq('password', p)
       .eq('approved', true)
       .maybeSingle()
-    if(error || !data){ alert('Usuário/senha inválidos ou não aprovado'); return }
+    if(error || !data){ alert('Usuário/senha inválidos ou não aprovado.'); return }
     setMe(data)
   }
-
   async function registerOperator({name,username,password,area}){
-    const payload = { name, username:(username||'').trim(), password:(password||'').trim(), role:'operador', area: area||null, approved:false }
+    const payload = { name, username: (username||'').trim(), password: (password||'').trim(), role:'operador', area: area||null, approved:false }
     const { error } = await supa.from('app_users').insert(payload)
-    if(error){ console.error(error); alert('Erro ao cadastrar'); return }
+    if(error){ console.error(error); alert('Erro ao cadastrar.'); return }
     alert('Cadastro enviado para aprovação da Gerência.')
   }
 
-  // ---- Gerência ----
+  // ---------- GERÊNCIA ----------
   async function addProduction(p){
-    const patch = { ...p, status:'na fila', current_area:null }
-    const { error } = await supa.from('productions').insert(patch)
+    const item = { ...p, status:'na fila', current_area:null }
+    const { error } = await supa.from('productions').insert(item)
     if(error){ console.error(error); alert('Erro ao cadastrar produção'); return }
     await refreshProds()
   }
   async function deleteProduction(id){
     const { error } = await supa.from('productions').delete().eq('id', id)
-    if(error){ console.error(error); alert('Erro ao deletar'); return }
+    if(error){ console.error(error); alert('Erro ao deletar produção'); return }
     await refreshProds()
   }
   async function approveUser(user, approve){
     if(approve){
-      await supa.from('app_users').update({approved:true}).eq('id',user.id)
-    }else{
-      await supa.from('app_users').delete().eq('id',user.id)
+      await supa.from('app_users').update({ approved:true }).eq('id', user.id)
+    } else {
+      await supa.from('app_users').delete().eq('id', user.id)
     }
   }
   async function deleteUser(user){
@@ -93,18 +87,30 @@ export default function App(){
     if(error){ console.error(error); alert('Erro ao deletar usuário'); return }
   }
 
-  // ---- Operador ----
-  async function startPrep(p){ await supa.from('productions').update({ status:'em preparação', current_area: 'Preparação' }).eq('id',p.id); refreshProds() }
-  async function startProd(p){ await supa.from('productions').update({ status:'em produção' }).eq('id',p.id); refreshProds() }
+  // ---------- OPERADOR ----------
+  async function startPrep(p){ await supa.from('productions').update({ status:'em preparação', current_area:'Preparação' }).eq('id', p.id); refreshProds() }
+  async function startProd(p){ await supa.from('productions').update({ status:'em produção' }).eq('id', p.id); refreshProds() }
   async function togglePause(p){
     const newStatus = p.status==='pausado' ? 'em produção' : 'pausado'
-    await supa.from('productions').update({ status:newStatus }).eq('id',p.id); refreshProds()
+    await supa.from('productions').update({ status:newStatus }).eq('id', p.id); refreshProds()
   }
   async function finishProd(p, discardQty, finalQty){
-    await supa.from('productions').update({ status:'finalizado', discard_qty:Number(discardQty||0), final_qty:Number(finalQty||0) }).eq('id',p.id); refreshProds()
+    await supa.from('productions').update({
+      status:'finalizado',
+      discard_qty: Number(discardQty||0),
+      final_qty: Number(finalQty||0)
+    }).eq('id', p.id)
+    refreshProds()
   }
-  async function signalProblem(p, desc){ await supa.from('events').insert({ type:'problem', production_id:p.id, details:{ desc } }); alert('Problema sinalizado.'); }
-  async function sendToNextArea(p, nextArea){ await supa.from('productions').update({ current_area:nextArea, status:'na fila' }).eq('id',p.id); refreshProds() }
+  async function signalProblem(p, desc){
+    if(!desc) return
+    await supa.from('events').insert({ type:'problem', production_id:p.id, details:{ desc } })
+    alert('Problema sinalizado.')
+  }
+  async function sendToNextArea(p, nextArea){
+    await supa.from('productions').update({ current_area: nextArea, status:'na fila' }).eq('id', p.id)
+    refreshProds()
+  }
 
   return (
     <div>
@@ -133,11 +139,14 @@ export default function App(){
           loading={loading}
         />
       )}
-      {me?.role==='consultor' && <Consultant productions={productions} reload={refreshProds} loading={loading} />}
+      {me?.role==='consultor' && (
+        <Consultant productions={productions} reload={refreshProds} loading={loading} />
+      )}
     </div>
   )
 }
 
+// ---------- TELAS ----------
 function Login({ onSignIn, onRegister }){
   const [u,setU] = useState('')
   const [p,setP] = useState('')
@@ -192,7 +201,7 @@ function Manager({ productions, addProduction, deleteProduction, approveUser, de
   const [pages,setPages] = useState(0)
   const [format,setFormat] = useState(FORMATS[1])
   const [osNumber,setOs] = useState('')
-  const [deadline,setDeadline] = useState(new Date(Date.now()+7*86400000).toISOString().slice(0,10))
+  const [deadline,setDeadline] = useState(new Date(Date.now()+7*dayMs).toISOString().slice(0,10))
 
   const [pending,setPending] = useState([])
   const [users,setUsers] = useState([])
@@ -228,7 +237,6 @@ function Manager({ productions, addProduction, deleteProduction, approveUser, de
           <div className="row" style={{marginTop:12}}>
             <button className="btn" onClick={()=>{
               if(!isbn || !title || !qty || !pages || !osNumber || !deadline){ alert('Preencha todos os campos'); return }
-              // Salva deadline como ISO (compatível com timestamptz)
               addProduction({ isbn, title, qty, pages, format, os_number: osNumber, deadline: new Date(deadline).toISOString() })
               setIsbn(''); setTitle(''); setQty(0); setPages(0); setOs('')
             }}>Cadastrar</button>
@@ -242,7 +250,7 @@ function Manager({ productions, addProduction, deleteProduction, approveUser, de
               <div key={p.id} className="between card p16 mb12">
                 <div>
                   <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
-                    <b>{p.title}</b> <span className="small muted">ISBN {p.isbn}</span> {dueBadge(p.deadline)}
+                    <b>{p.title}</b> <span className="small muted">ISBN {p.isbn}</span> <DueBadge deadline={p.deadline}/>
                   </div>
                   <div className="small muted">OS {p.os_number} • {p.qty} un. • {p.pages} págs • Formato {p.format} • Status: {p.status||'na fila'}</div>
                   <div className="small">Área atual: <b>{p.current_area||'—'}</b> • Prazo: <b>{fmtDate(p.deadline)}</b></div>
@@ -337,7 +345,7 @@ function Operator({ productions, startPrep, startProd, togglePause, finishProd, 
               <div className="between">
                 <div>
                   <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
-                    <b>{p.title}</b> <span className="small muted">ISBN {p.isbn}</span> {dueBadge(p.deadline)}
+                    <b>{p.title}</b> <span className="small muted">ISBN {p.isbn}</span> <DueBadge deadline={p.deadline}/>
                   </div>
                   <div className="small muted">OS {p.os_number} • {p.qty} un. • {p.pages} págs</div>
                   <div className="small">Área atual: <b>{p.current_area||'—'}</b> • Status: <b>{p.status||'na fila'}</b> • Prazo: <b>{fmtDate(p.deadline)}</b></div>
@@ -389,7 +397,7 @@ function Consultant({ productions, reload, loading }){
           <div key={p.id} className="between mb12">
             <div>
               <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
-                <b>{p.title}</b> <span className="small muted">ISBN {p.isbn}</span> {dueBadge(p.deadline)}
+                <b>{p.title}</b> <span className="small muted">ISBN {p.isbn}</span> <DueBadge deadline={p.deadline}/>
               </div>
               <div className="small muted">Status: {p.status||'na fila'} • Área: {p.current_area||'—'}</div>
             </div>
