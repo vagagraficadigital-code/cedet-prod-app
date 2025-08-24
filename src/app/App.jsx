@@ -13,6 +13,7 @@ const dayMs = 24*60*60*1000
 const fmtDate = (d)=> d ? new Date(d).toLocaleDateString() : "—"
 const fmtDateTime = (d)=> d ? new Date(d).toLocaleString() : "—"
 const areaIdx = (a)=> Math.max(0, AREAS.findIndex(x=>x===a))
+
 function DueBadge({deadline}){
   if(!deadline) return null
   const dl = new Date(deadline).getTime()
@@ -31,15 +32,35 @@ export default function App(){
 
   useEffect(()=>{ if(me) refreshProds() },[me])
 
+  // >>> FALLBACK APLICADO AQUI <<<
   async function refreshProds(){
     setLoading(true)
-    const { data, error } = await supa.from('productions')
-      .select('*')
-      .order('priority', { ascending: true, nullsFirst: false })
-      .order('deadline', { ascending: true })
-    if(error){ console.error(error); alert('Erro ao carregar produções'); }
-    setProductions(data||[])
-    setLoading(false)
+    try {
+      // tentativa principal: priority + deadline
+      const { data, error } = await supa
+        .from('productions')
+        .select('*')
+        .order('priority', { ascending: true, nullsFirst: false })
+        .order('deadline', { ascending: true })
+      if (error) throw error
+      setProductions(data || [])
+    } catch (e) {
+      console.warn('Falha ao ordenar por priority; usando created_at. Motivo:', e?.message || e)
+      // fallback seguro: created_at
+      const { data, error } = await supa
+        .from('productions')
+        .select('*')
+        .order('created_at', { ascending: true })
+      if (error) {
+        console.error(error)
+        alert('Erro ao carregar produções (fallback).')
+        setProductions([])
+      } else {
+        setProductions(data || [])
+      }
+    } finally {
+      setLoading(false)
+    }
   }
 
   // AUTH
@@ -67,7 +88,11 @@ export default function App(){
   async function addProduction(p){
     const item = { ...p, status:'na fila', current_area:null, priority: Date.now() }
     const { error } = await supa.from('productions').insert(item)
-    if(error){ console.error(error); alert('Erro ao cadastrar produção'); return }
+    if(error){
+      console.error(error)
+      alert('Erro ao cadastrar produção')
+      return
+    }
     await refreshProds()
   }
   async function deleteProduction(id){
