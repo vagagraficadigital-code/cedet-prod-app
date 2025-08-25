@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { supa } from './supa'
+import './styles.css'
 
+/** Constantes de negócio */
 const AREAS = [
   "Impressora Speed","Impressora Adast 715","Impressora Adast 725","Impressora GTO Capas",
   "Impressora Digital Versant - Capas","Impressora Digital Nuvera - Miolo","Laminação de Capas",
@@ -48,7 +50,7 @@ export default function App(){
     } finally { setLoading(false) }
   }
 
-  // ===== AUTH =====
+  /** ======= AUTH ======= */
   async function signIn(username, password){
     const u = (username||'').trim().toLowerCase()
     const p = (password||'').trim()
@@ -59,7 +61,6 @@ export default function App(){
     if(error || !data){ alert('Usuário/senha inválidos ou não aprovado.'); return }
     setMe(data)
   }
-
   async function registerOperator({name,username,password,area}){
     const payload = { name, username:(username||'').trim().toLowerCase(), password:(password||'').trim(), role:'operador', area:area||null, approved:false }
     const { error } = await supa.from('app_users').insert(payload)
@@ -68,7 +69,7 @@ export default function App(){
   }
   function signOut(){ setMe(null); setProductions([]); setDetailFor(null) }
 
-  // ===== GERÊNCIA =====
+  /** ======= GERÊNCIA ======= */
   async function addProduction(p){
     let err = null
     const item = { ...p, status:'na fila', current_area:null, priority: Date.now() }
@@ -79,7 +80,8 @@ export default function App(){
       err = res.error
     }
     if(err){ console.error(err); alert('Erro ao cadastrar produção'); return }
-    await supa.from('events').insert({ type:'created', production_id: res.data?.[0]?.id || (await supa.from('productions').select('id').order('id',{ascending:false}).limit(1)).data?.[0]?.id })
+    const newId = res.data?.[0]?.id || (await supa.from('productions').select('id').order('id',{ascending:false}).limit(1)).data?.[0]?.id
+    if(newId){ await supa.from('events').insert({ type:'created', production_id:newId }) }
     await refreshProds()
   }
   async function deleteProduction(id){
@@ -102,7 +104,7 @@ export default function App(){
     await refreshProds()
   }
 
-  // ===== OPERADOR =====
+  /** ======= OPERADOR ======= */
   async function startPrep(p){
     await supa.from('productions').update({ status:'em preparação', current_area:'Preparação' }).eq('id', p.id)
     await supa.from('events').insert({ type:'prep_start', production_id:p.id })
@@ -141,18 +143,24 @@ export default function App(){
 
   return (
     <div>
+      {/* HEADER CENTRADO V4 */}
       <div className="header">
         <div className="header-inner">
+          <div></div>
           <div className="brand">
-            <img src="/logo.png" className="logo" alt="logo" />
+            <img src="/logo.png" className="logo" alt="logo"/>
             <div className="appname">CEDET – Gestão de Produção</div>
           </div>
-          {me && <div className="small">Logado como <b style={{color:'#fff'}}>{me.role}</b> &nbsp; <span className="link" onClick={signOut}>Sair</span></div>}
+          <div className="userbox">
+            {me && <>Logado: <b style={{color:'#fff'}}>{me.role}</b> · <span className="link" onClick={signOut}>Sair</span></>}
+          </div>
         </div>
       </div>
 
+      {/* LOGIN NOVO, CENTRADO */}
       {!me && <Login onSignIn={signIn} onRegister={registerOperator} />}
 
+      {/* PAINÉIS */}
       {me?.role==='gerencia' && (
         <Manager
           productions={productions}
@@ -192,6 +200,7 @@ export default function App(){
   )
 }
 
+/** ================= Login (novo) ================= */
 function Login({ onSignIn, onRegister }){
   const [u,setU] = useState('')
   const [p,setP] = useState('')
@@ -241,6 +250,7 @@ function Login({ onSignIn, onRegister }){
   )
 }
 
+/** ================= Gerência ================= */
 function Manager({ productions, addProduction, deleteProduction, approveUser, deleteUser, moveUp, moveDown, openDetail, reload, loading }){
   const [isbn,setIsbn] = useState('')
   const [title,setTitle] = useState('')
@@ -258,13 +268,13 @@ function Manager({ productions, addProduction, deleteProduction, approveUser, de
 
   return (
     <div className="container">
-      <div className="between mb12">
+      <div className="between mb16">
         <h3>Painel da Gerência</h3>
         <button className="btn secondary" onClick={reload}>{loading?'Atualizando...':'Atualizar'}</button>
       </div>
 
-      <div className="grid2 mb16">
-        <div className="card p16">
+      <div className="grid2 mb20">
+        <div className="card p20">
           <div className="mb12"><b>Cadastrar nova produção</b></div>
           <div className="grid2">
             <input className="inp" placeholder="ISBN" value={isbn} onChange={e=>setIsbn(e.target.value)} />
@@ -286,11 +296,11 @@ function Manager({ productions, addProduction, deleteProduction, approveUser, de
           </div>
         </div>
 
-        <div className="card p16">
+        <div className="card p20">
           <div className="between mb12"><b>Fila de produção</b></div>
           <div className="list">
             {productions.map(p=> (
-              <div key={p.id} className="between card p16" style={{cursor:'pointer'}}>
+              <div key={p.id} className="between card p16 rowCard">
                 <div onClick={()=>openDetail(p)}>
                   <div className="flex">
                     <b>{p.title}</b> <span className="small">ISBN {p.isbn}</span> <DueBadge deadline={p.deadline}/>
@@ -310,7 +320,7 @@ function Manager({ productions, addProduction, deleteProduction, approveUser, de
         </div>
       </div>
 
-      <div className="card p16">
+      <div className="card p20">
         <div className="mb12"><b>Solicitações de cadastro (pendentes)</b></div>
         {pending.length===0 && <div className="small">Nenhuma pendência.</div>}
         {pending.map(u=> (
@@ -320,14 +330,12 @@ function Manager({ productions, addProduction, deleteProduction, approveUser, de
               <button className="btn" onClick={async ()=>{
                 await approveUser(u,true)
                 const { data } = await supa.from('app_users').select('*').eq('approved', false)
-                setPending(data||[])
-                alert('Operador aprovado.')
+                setPending(data||[]); alert('Operador aprovado.')
               }}>Aprovar</button>
               <button className="btn danger" onClick={async ()=>{
                 await approveUser(u,false)
                 const { data } = await supa.from('app_users').select('*').eq('approved', false)
-                setPending(data||[])
-                alert('Cadastro removido.')
+                setPending(data||[]); alert('Cadastro removido.')
               }}>Recusar</button>
             </div>
           </div>
@@ -337,6 +345,7 @@ function Manager({ productions, addProduction, deleteProduction, approveUser, de
   )
 }
 
+/** ================= Operador ================= */
 function Operator({ productions, startPrep, startProd, togglePause, finishProd, sendToNextArea, signalProblem, openDetail, reload, loading }){
   const [search,setSearch] = useState('')
   const [finishFor,setFinishFor] = useState(null)
@@ -356,11 +365,11 @@ function Operator({ productions, startPrep, startProd, togglePause, finishProd, 
 
   return (
     <div className="container">
-      <div className="between mb12">
+      <div className="between mb16">
         <h3>Painel do Operador</h3>
         <button className="btn secondary" onClick={reload}>{loading?'Atualizando...':'Atualizar'}</button>
       </div>
-      <div className="card p16 mb16">
+      <div className="card p20 mb16">
         <div className="between mb12">
           <b>Fila de produção</b>
           <div className="small">Busque por ISBN ou título</div>
@@ -384,13 +393,13 @@ function Operator({ productions, startPrep, startProd, togglePause, finishProd, 
                 </div>
                 <button className="btn secondary" onClick={()=>{ const d=prompt('Descreva o problema:'); if(d) signalProblem(p,d) }}>Problema</button>
               </div>
-              <div className="flex" style={{marginTop:8,flexWrap:'wrap'}}>
+              <div className="flex" style={{marginTop:8}}>
                 <button className="btn" onClick={()=>startPrep(p)}>Preparação</button>
                 <button className="btn" onClick={()=>startProd(p)}>Iniciar</button>
                 <button className="btn secondary" onClick={()=>togglePause(p)}>{p.status==='pausado'? 'Retomar':'Pausar'}</button>
                 <button className="btn" onClick={()=>setFinishFor(p)}>Finalizar</button>
               </div>
-              <div className="flex" style={{marginTop:10,flexWrap:'wrap'}}>
+              <div className="flex" style={{marginTop:8}}>
                 {prev && <span className="area-chip">{prev}</span>}
                 <span className="area-chip area-chip--current">• {curr} •</span>
                 {next && <span className="area-chip" onClick={()=>sendToNextArea(p,next)} title="Enviar para a próxima área">{next} →</span>}
@@ -402,9 +411,9 @@ function Operator({ productions, startPrep, startProd, togglePause, finishProd, 
       </div>
 
       {finishFor && (
-        <div className="card p16">
+        <div className="card p20">
           <div className="mb12"><b>Finalizar produção</b> – {finishFor.title}</div>
-          <div className="flex mb12" style={{flexWrap:'wrap'}}>
+          <div className="flex mb12">
             <label className="small">Perdas (descarte)</label>
             <input className="inp" type="number" placeholder="Ex.: 3" value={discard} onChange={e=>setDiscard(e.target.value)} />
             <label className="small">Quantidade final produzida</label>
@@ -420,17 +429,18 @@ function Operator({ productions, startPrep, startProd, togglePause, finishProd, 
   )
 }
 
+/** ================= Consultor ================= */
 function Consultant({ productions, openDetail, reload, loading }){
   return (
     <div className="container">
-      <div className="between mb12">
+      <div className="between mb16">
         <h3>Painel do Consultor</h3>
         <button className="btn secondary" onClick={reload}>{loading?'Atualizando...':'Atualizar'}</button>
       </div>
-      <div className="card p16">
+      <div className="card p20">
         <div className="mb12"><b>Status dos livros</b></div>
         {productions.map(p=> (
-          <div key={p.id} className="between" style={{cursor:'pointer'}} onClick={()=>openDetail(p)}>
+          <div key={p.id} className="between rowCard" onClick={()=>openDetail(p)}>
             <div>
               <div className="flex">
                 <b>{p.title}</b> <span className="small">ISBN {p.isbn}</span> <DueBadge deadline={p.deadline}/>
@@ -446,6 +456,7 @@ function Consultant({ productions, openDetail, reload, loading }){
   )
 }
 
+/** ================= Detalhes do Livro ================= */
 function BookDetail({ prod, onClose }){
   const [events,setEvents] = useState([])
   useEffect(()=>{ (async()=>{
