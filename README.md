@@ -1,3 +1,0 @@
-# CEDET Gestão Produção – Clean V1 COMPLETO
-
-Gerado 2025-08-27T19:18:26.987572Z
