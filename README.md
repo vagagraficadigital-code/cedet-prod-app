@@ -1,2 +1,0 @@
-# CEDET Gestão V4
-Gerado em 2025-08-25T17:56:30.647726Z
