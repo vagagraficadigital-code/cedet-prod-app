@@ -1,0 +1,2 @@
+create table if not exists app_users(id bigserial primary key,name text,username text unique,password text,role text check(role in('master','gerencia','operador','consultor')) default 'operador',area text,approved boolean default false,active boolean default true,created_at timestamptz default now());
+create table if not exists productions(id bigserial primary key,isbn text,title text,qty integer,pages integer,format text,os_number text,deadline timestamptz,status text,current_area text,created_at timestamptz default now());
