@@ -1,8 +1,0 @@
-import React,{useState,useEffect}from'react';import{ supa }from'./supa';import'./styles.css';
-export default function App(){const[me,setMe]=useState(null);const[productions,setProductions]=useState([]);const[u,setU]=useState('');const[p,setP]=useState('');const[e,setE]=useState('');
-async function login(){const{data,error}=await supa.from('app_users').select('*').eq('username',u).eq('password',p).maybeSingle();if(error||!data){setE('Usuário/senha inválidos');return;}if(!data.approved){setE('Aguardando aprovação');return;}setMe(data);}
-async function logout(){setMe(null);}
-async function load(){const{data}=await supa.from('productions').select('*').order('created_at',{ascending:true});setProductions(data||[]);}
-useEffect(()=>{if(me)load();},[me]);
-if(!me){return(<div className='login-shell'><div className='login-card'><h2>Login</h2>{e&&<div style={{color:'red'}}>{e}</div>}<input placeholder='Usuário' value={u} onChange={ev=>setU(ev.target.value)}/><input placeholder='Senha' type='password' value={p} onChange={ev=>setP(ev.target.value)}/><button onClick={login}>Entrar</button></div></div>);}
-return(<div><div className='header-inner'><h3>{me.username} ({me.role})</h3><button onClick={logout}>Sair</button></div>{me.role==='gerencia'&&<div><h3>Gerência</h3><button onClick={load}>Recarregar</button><ul>{productions.map(p=><li key={p.id}>{p.title} – {p.status}</li>)}</ul></div>}{me.role==='operador'&&<div><h3>Operador</h3><ul>{productions.map(p=><li key={p.id}>{p.title} – {p.status}</li>)}</ul></div>}{me.role==='consultor'&&<div><h3>Consultor</h3><ul>{productions.map(p=><li key={p.id}>{p.title} – {p.status}</li>)}</ul></div>}{me.role==='master'&&<div><h3>Master</h3><p>Acesso total</p></div>}</div>);}
